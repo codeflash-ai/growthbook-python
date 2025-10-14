@@ -3,7 +3,7 @@ import re
 import json
 
 from urllib.parse import urlparse, parse_qs
-from typing import Callable, Optional, Any, Set, Tuple, List, Dict
+from typing import Callable, Optional, Tuple, List, Dict
 from .common_types import EvaluationContext, FeatureResult, Experiment, Filter, Result, UserContext, VariationMeta
 
 
@@ -85,15 +85,25 @@ def evalConditionValue(conditionValue, attributeValue, savedGroups) -> bool:
     return conditionValue == attributeValue
 
 def elemMatch(condition, attributeValue, savedGroups) -> bool:
-    if not type(attributeValue) is list:
+    # Fast-path type check
+    if type(attributeValue) is not list:
         return False
 
-    for item in attributeValue:
-        if isOperatorObject(condition):
-            if evalConditionValue(condition, item, savedGroups):
+    # Pre-bind operator object checker and condition evaluators
+    _isOperatorObject = isOperatorObject
+    _evalConditionValue = evalConditionValue
+    _evalCondition = evalCondition
+
+    # Optimization: check condition type only once outside loop if possible
+    condition_is_operator = _isOperatorObject(condition)
+
+    if condition_is_operator:
+        for item in attributeValue:
+            if _evalConditionValue(condition, item, savedGroups):
                 return True
-        else:
-            if evalCondition(item, condition, savedGroups):
+    else:
+        for item in attributeValue:
+            if _evalCondition(item, condition, savedGroups):
                 return True
 
     return False
