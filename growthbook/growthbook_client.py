@@ -58,15 +58,16 @@ class BackoffStrategy:
 
     def next_delay(self) -> float:
         """Calculate next delay with jitter"""
-        delay = min(
-            self.current_delay * (self.multiplier ** self.attempt), 
-            self.max_delay
-        )
+        delay = self.current_delay * (self.multiplier ** self.attempt)
+        if delay > self.max_delay:
+            delay = self.max_delay
         # Add random jitter
         jitter_amount = delay * self.jitter
         delay = delay + (random.random() * 2 - 1) * jitter_amount
         self.attempt += 1
-        return max(delay, self.initial_delay)
+        if delay < self.initial_delay:
+            return self.initial_delay
+        return delay
 
     def reset(self) -> None:
         """Reset backoff state"""
