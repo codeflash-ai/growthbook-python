@@ -3,7 +3,7 @@ import re
 import json
 
 from urllib.parse import urlparse, parse_qs
-from typing import Callable, Optional, Any, Set, Tuple, List, Dict
+from typing import Callable, Optional, Tuple, List, Dict
 from .common_types import EvaluationContext, FeatureResult, Experiment, Filter, Result, UserContext, VariationMeta
 
 
@@ -345,8 +345,10 @@ def inRange(n: float, range: Tuple[float, float]) -> bool:
     return range[0] <= n < range[1]
 
 def chooseVariation(n: float, ranges: List[Tuple[float, float]]) -> int:
-    for i, r in enumerate(ranges):
-        if inRange(n, r):
+    # Manual loop unrolling is not helpful here - instead, inline inRange logic
+    # to avoid function call overhead in tight for-loop.
+    for i, (low, high) in enumerate(ranges):
+        if low <= n < high:
             return i
     return -1
 
