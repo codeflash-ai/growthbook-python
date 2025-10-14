@@ -222,10 +222,16 @@ def paddedVersionString(input) -> str:
         input = "0"
 
     # Remove build info and leading `v` if any
-    input = re.sub(r"(^v|\+.*$)", "", input)
+    s = input
+    if s and s[0] == 'v':
+        s = s[1:]
+    plus = s.find('+')
+    if plus != -1:
+        s = s[:plus]
+    
     # Split version into parts (both core version numbers and pre-release tags)
     # "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
-    parts = re.split(r"[-.]", input)
+    parts = re.split(r"[-.]", s)
     # If it's SemVer without a pre-release, add `~` to the end
     # ["1","0","0"] -> ["1","0","0","~"]
     # "~" is the largest ASCII character, so this will make "1.0.0" greater than "1.0.0-beta" for example
@@ -233,7 +239,7 @@ def paddedVersionString(input) -> str:
         parts.append("~")
     # Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
     # Then, join back together into a single string
-    return "-".join([v.rjust(5, " ") if re.match(r"^[0-9]+$", v) else v for v in parts])
+    return "-".join([v.rjust(5, " ") if v.isdigit() else v for v in parts])
 
 
 def isIn(conditionValue, attributeValue) -> bool:
