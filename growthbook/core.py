@@ -558,7 +558,6 @@ def eval_prereqs(parentConditions: List[dict], evalContext: EvaluationContext) -
 
 def _get_sticky_bucket_experiment_key(experiment_key: str, bucket_version: int = 0) -> str:
     return experiment_key + "__" + str(bucket_version)
-    
 def _get_sticky_bucket_assignments(evalContext: EvaluationContext,
                                     attr: str = None,
                                     fallback: str = None) -> Dict[str, str]:
@@ -588,10 +587,16 @@ def _is_blocked(
     min_bucket_version: int
 ) -> bool:
     if min_bucket_version > 0:
-        for i in range(min_bucket_version):
-            blocked_key = _get_sticky_bucket_experiment_key(experiment_key, i)
-            if blocked_key in assignments:
-                return True
+        prefix = experiment_key + "__"
+        prefix_len = len(prefix)
+        for key in assignments:
+            if key.startswith(prefix):
+                try:
+                    bucket_version = int(key[prefix_len:])
+                except ValueError:
+                    continue
+                if 0 <= bucket_version < min_bucket_version:
+                    return True
     return False
 
 def _get_sticky_bucket_variation(
