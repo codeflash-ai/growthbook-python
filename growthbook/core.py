@@ -352,18 +352,47 @@ def chooseVariation(n: float, ranges: List[Tuple[float, float]]) -> int:
 
 def getQueryStringOverride(id: str, url: str, numVariations: int) -> Optional[int]:
     res = urlparse(url)
-    if not res.query:
+    query = res.query
+    if not query:
         return None
-    qs = parse_qs(res.query)
-    if id not in qs:
-        return None
-    variation = qs[id][0]
-    if variation is None or not variation.isdigit():
-        return None
-    varId = int(variation)
-    if varId < 0 or varId >= numVariations:
-        return None
-    return varId
+
+    # Manually parse the query string for the given id for efficiency
+    # Let id="x", valid query: "a=1&b=2&x=3", or just "x=3"
+    idx = 0
+    query_len = len(query)
+    id_eq = id + '='
+    id_eq_len = len(id_eq)
+    while idx < query_len:
+        # Find id key at the start or after an '&'
+        if (idx == 0 and query.startswith(id_eq)) or (
+            idx > 0 and query[idx - 1] == '&' and query.startswith(id_eq, idx)
+        ):
+            value_start = idx + id_eq_len
+            # Find the end of this parameter
+            value_end = query.find('&', value_start)
+            if value_end == -1:
+                value = query[value_start:]
+            else:
+                value = query[value_start:value_end]
+
+            # In parse_qs & urlparse, values are %-decoded, but only for bytes < 128.
+            # We'll use unquote for full compatibility with parse_qs.
+            from urllib.parse import unquote_plus
+            variation = unquote_plus(value)
+            if not variation.isdigit():
+                return None
+            varId = int(variation)
+            if varId < 0 or varId >= numVariations:
+                return None
+            return varId
+
+        # Move past next '&'
+        next_amp = query.find('&', idx)
+        if next_amp == -1:
+            break
+        idx = next_amp + 1
+
+    return None
 
 def _urlIsValid(url: Optional[str], pattern: str) -> bool:
     if not url: # it was self._url! Ignored the param passed in.
