@@ -21,7 +21,7 @@ class ClientSideAttributes:
     """
     Client-side attributes that can't be detected server-side.
     """
-    
+
     def __init__(self, **attributes: Any):
         """
         Initialize with any client-side attributes.
@@ -36,13 +36,18 @@ class ClientSideAttributes:
         Args:
             **attributes: Any client-side attributes as key-value pairs
         """
-        for key, value in attributes.items():
-            if value is not None:
-                setattr(self, key, value)
+        # Use direct __dict__.update with filtered attributes for efficiency
+        self.__dict__.update({k: v for k, v in attributes.items() if v is not None})
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {k: v for k, v in self.__dict__.items() if v is not None}
+        # Create a shallow copy and filter None values
+        d = self.__dict__
+        # Avoid rebuilding the dict if all values are non-None (common fast-path)
+        if all(v is not None for v in d.values()):
+            return dict(d)
+        # Otherwise, filter out any keys with None values
+        return {k: v for k, v in d.items() if v is not None}
 
 
 class RequestContextPlugin(GrowthBookPlugin):
