@@ -6,6 +6,8 @@ from urllib.parse import urlparse, parse_qs
 from typing import Callable, Optional, Any, Set, Tuple, List, Dict
 from .common_types import EvaluationContext, FeatureResult, Experiment, Filter, Result, UserContext, VariationMeta
 
+_pattern_cache = {}
+
 
 logger = logging.getLogger("growthbook.core")
 
@@ -370,11 +372,27 @@ def _urlIsValid(url: Optional[str], pattern: str) -> bool:
         return False
 
     try:
-        r = re.compile(pattern)
+        r = _pattern_cache.get(pattern)
+        if r is None:
+            r = re.compile(pattern)
+            _pattern_cache[pattern] = r
         if r.search(url):
             return True
 
-        pathOnly = re.sub(r"^[^/]*/", "/", re.sub(r"^https?:\/\/", "", url))
+        # Manual path extraction for better performance
+        if url.startswith("https://"):
+            rest = url[8:]
+        elif url.startswith("http://"):
+            rest = url[7:]
+        else:
+            rest = url
+
+        slash_idx = rest.find('/')
+        if slash_idx != -1:
+            pathOnly = rest[slash_idx:]
+        else:
+            pathOnly = "/"
+
         if r.search(pathOnly):
             return True
         return False
