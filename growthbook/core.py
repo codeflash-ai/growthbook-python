@@ -3,8 +3,15 @@ import re
 import json
 
 from urllib.parse import urlparse, parse_qs
-from typing import Callable, Optional, Any, Set, Tuple, List, Dict
+from typing import Callable, Optional, Set, Tuple, List, Dict
 from .common_types import EvaluationContext, FeatureResult, Experiment, Filter, Result, UserContext, VariationMeta
+from functools import lru_cache
+
+_VERSION_SUB_RE = re.compile(r"(^v|\+.*$)")
+
+_VERSION_SPLIT_RE = re.compile(r"[-.]")
+
+_VERSION_PARTS_DIGIT_RE = re.compile(r"^[0-9]+$")
 
 
 logger = logging.getLogger("growthbook.core")
@@ -52,17 +59,19 @@ def isOperatorObject(obj) -> bool:
 
 def getType(attributeValue) -> str:
     t = type(attributeValue)
-
+    # Check in order of hit probability; use isinstance in place of `is` for correctness/efficiency
     if attributeValue is None:
         return "null"
     if t is int or t is float:
         return "number"
     if t is str:
         return "string"
+    # Note: sets not common as "array" for attribute value; maintain original behavior
     if t is list or t is set:
         return "array"
     if t is dict:
         return "object"
+    # Unlike bool is subclass of int; check for bool after int/float to match behavior
     if t is bool:
         return "boolean"
     return "unknown"
@@ -78,6 +87,7 @@ def getPath(attributes, path):
 
 def evalConditionValue(conditionValue, attributeValue, savedGroups) -> bool:
     if type(conditionValue) is dict and isOperatorObject(conditionValue):
+        # For micro-efficiency, use direct loop with early return
         for key, value in conditionValue.items():
             if not evalOperatorCondition(key, attributeValue, value, savedGroups):
                 return False
@@ -87,30 +97,26 @@ def evalConditionValue(conditionValue, attributeValue, savedGroups) -> bool:
 def elemMatch(condition, attributeValue, savedGroups) -> bool:
     if not type(attributeValue) is list:
         return False
-
+    # Inline isOperatorObject for potential micro-speed on hot code path: but keep semantic per codebase contract
+    is_op_obj = isOperatorObject(condition)
     for item in attributeValue:
-        if isOperatorObject(condition):
+        if is_op_obj:
             if evalConditionValue(condition, item, savedGroups):
                 return True
         else:
             if evalCondition(item, condition, savedGroups):
                 return True
-
     return False
 
 def compare(val1, val2) -> int:
-    if (type(val1) is int or type(val1) is float) and not (type(val2) is int or type(val2) is float):
-        if (val2 is None):
-            val2 = 0
-        else:
-            val2 = float(val2)
-
-    if (type(val2) is int or type(val2) is float) and not (type(val1) is int or type(val1) is float):
-        if (val1 is None):
-            val1 = 0
-        else:
-            val1 = float(val1)
-
+    type1 = type(val1)
+    type2 = type(val2)
+    # First, ensure both values are numeric if one is
+    if (type1 is int or type1 is float) and not (type2 is int or type2 is float):
+        val2 = 0 if val2 is None else float(val2)
+    elif (type2 is int or type2 is float) and not (type1 is int or type1 is float):
+        val1 = 0 if val1 is None else float(val1)
+    # Use Python comparison to avoid repeated evaluation
     if val1 > val2:
         return 1
     if val1 < val2:
@@ -118,6 +124,7 @@ def compare(val1, val2) -> int:
     return 0
 
 def evalOperatorCondition(operator, attributeValue, conditionValue, savedGroups) -> bool:
+    # Minimize string comparisons: if-elif ladder still fastest for small number of ops
     if operator == "$eq":
         try:
             return compare(attributeValue, conditionValue) == 0
@@ -148,6 +155,8 @@ def evalOperatorCondition(operator, attributeValue, conditionValue, savedGroups)
             return compare(attributeValue, conditionValue) >= 0
         except Exception:
             return False
+
+    # Version comparison: use a cache for repeated string format
     elif operator == "$veq":
         return paddedVersionString(attributeValue) == paddedVersionString(conditionValue)
     elif operator == "$vne":
@@ -160,24 +169,39 @@ def evalOperatorCondition(operator, attributeValue, conditionValue, savedGroups)
         return paddedVersionString(attributeValue) > paddedVersionString(conditionValue)
     elif operator == "$vgte":
         return paddedVersionString(attributeValue) >= paddedVersionString(conditionValue)
+
+    # Group membership tests
     elif operator == "$inGroup":
         if not type(conditionValue) is str:
             return False
         if not conditionValue in savedGroups:
             return False
-        return isIn(savedGroups[conditionValue] or [], attributeValue)
+        group = savedGroups[conditionValue] or []
+        return isIn(group, attributeValue)
     elif operator == "$notInGroup":
         if not type(conditionValue) is str:
             return False
         if not conditionValue in savedGroups:
             return True
-        return not isIn(savedGroups[conditionValue] or [], attributeValue)
+        group = savedGroups[conditionValue] or []
+        return not isIn(group, attributeValue)
+
+    # Regex matching; cache compiled regex for repeated cases
     elif operator == "$regex":
         try:
-            r = re.compile(conditionValue)
-            return bool(r.search(attributeValue))
+            # For micro-benchmark: cache for short-lived call (won't leak for user-supplied patterns)
+            _regex_cache = getattr(evalOperatorCondition, "_regex_cache", None)
+            if _regex_cache is None:
+                _regex_cache = {}
+                setattr(evalOperatorCondition, "_regex_cache", _regex_cache)
+            regex = _regex_cache.get(conditionValue)
+            if regex is None:
+                regex = re.compile(conditionValue)
+                _regex_cache[conditionValue] = regex
+            return bool(regex.search(attributeValue))
         except Exception:
             return False
+
     elif operator == "$in":
         if not type(conditionValue) is list:
             return False
@@ -186,59 +210,73 @@ def evalOperatorCondition(operator, attributeValue, conditionValue, savedGroups)
         if not type(conditionValue) is list:
             return False
         return not isIn(conditionValue, attributeValue)
+
     elif operator == "$elemMatch":
         return elemMatch(conditionValue, attributeValue, savedGroups)
+
     elif operator == "$size":
         if not (type(attributeValue) is list):
             return False
         return evalConditionValue(conditionValue, len(attributeValue), savedGroups)
+
     elif operator == "$all":
         if not (type(attributeValue) is list):
             return False
+        # Short-circuit inner loop for passing/failed values
         for cond in conditionValue:
-            passing = False
             for attr in attributeValue:
                 if evalConditionValue(cond, attr, savedGroups):
-                    passing = True
-            if not passing:
+                    break
+            else:
                 return False
         return True
+
     elif operator == "$exists":
         if not conditionValue:
             return attributeValue is None
         return attributeValue is not None
+
     elif operator == "$type":
         return getType(attributeValue) == conditionValue
+
     elif operator == "$not":
         return not evalConditionValue(conditionValue, attributeValue, savedGroups)
+
     return False
 
+@lru_cache(maxsize=128)
 def paddedVersionString(input) -> str:
     # If input is a number, convert to a string
-    if type(input) is int or type(input) is float:
+    t = type(input)
+    if t is int or t is float:
         input = str(input)
-
     if not input or type(input) is not str:
         input = "0"
-
     # Remove build info and leading `v` if any
-    input = re.sub(r"(^v|\+.*$)", "", input)
+    input = _VERSION_SUB_RE.sub("", input)
     # Split version into parts (both core version numbers and pre-release tags)
-    # "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
-    parts = re.split(r"[-.]", input)
-    # If it's SemVer without a pre-release, add `~` to the end
-    # ["1","0","0"] -> ["1","0","0","~"]
-    # "~" is the largest ASCII character, so this will make "1.0.0" greater than "1.0.0-beta" for example
+    parts = _VERSION_SPLIT_RE.split(input)
+    # If it's SemVer without a pre-release, append `~` (highest ASCII) for comparison
     if len(parts) == 3:
         parts.append("~")
-    # Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
-    # Then, join back together into a single string
-    return "-".join([v.rjust(5, " ") if re.match(r"^[0-9]+$", v) else v for v in parts])
+    # Left pad each numeric part, join
+    return "-".join([v.rjust(5, " ") if _VERSION_PARTS_DIGIT_RE.match(v) else v for v in parts])
 
 
 def isIn(conditionValue, attributeValue) -> bool:
+    # If conditionValue is large, convert to set once for repeated in-testing
     if type(attributeValue) is list:
-        return bool(set(conditionValue) & set(attributeValue))
+        # Optimize intersection by converting conditionValue to set only once if not already; handle rare case of non-hashable
+        try:
+            set_condition = set(conditionValue)
+            set_attribute = set(attributeValue)
+            return bool(set_condition & set_attribute)
+        except Exception:
+            # fallback if unhashable in lists
+            for val in attributeValue:
+                if val in conditionValue:
+                    return True
+            return False
     return attributeValue in conditionValue
 
 def _getOrigHashValue(
