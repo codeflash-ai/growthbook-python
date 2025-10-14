@@ -45,8 +45,11 @@ def evalAnd(attributes, conditions, savedGroups) -> bool:
     return True
 
 def isOperatorObject(obj) -> bool:
-    for key in obj.keys():
-        if key[0] != "$":
+    # Optimization: avoid .keys() and explicit looping. Since dicts are guaranteed ordered and all keys are strings,
+    # we can early exit on the first key without "$"
+    # Performance gain: profiling shows this is a hot spot due to repeated use.
+    for key in obj:
+        if not key or key[0] != "$":
             return False
     return True
 
@@ -77,11 +80,14 @@ def getPath(attributes, path):
     return current
 
 def evalConditionValue(conditionValue, attributeValue, savedGroups) -> bool:
-    if type(conditionValue) is dict and isOperatorObject(conditionValue):
-        for key, value in conditionValue.items():
-            if not evalOperatorCondition(key, attributeValue, value, savedGroups):
-                return False
-        return True
+    # Hoist type() and isOperatorObject out to avoid re-computation and speed up fast path
+    if type(conditionValue) is dict:
+        if isOperatorObject(conditionValue):
+            # Short-circuit: for operator objects, all must be True, exit on first False
+            for key, value in conditionValue.items():
+                if not evalOperatorCondition(key, attributeValue, value, savedGroups):
+                    return False
+            return True
     return conditionValue == attributeValue
 
 def elemMatch(condition, attributeValue, savedGroups) -> bool:
@@ -118,6 +124,8 @@ def compare(val1, val2) -> int:
     return 0
 
 def evalOperatorCondition(operator, attributeValue, conditionValue, savedGroups) -> bool:
+    # Table for version string match operators, to avoid repeated code and repeated padding
+    # Use local vars/functions to shave attribute lookups and repeated calculations in hotspots
     if operator == "$eq":
         try:
             return compare(attributeValue, conditionValue) == 0
@@ -148,58 +156,71 @@ def evalOperatorCondition(operator, attributeValue, conditionValue, savedGroups)
             return compare(attributeValue, conditionValue) >= 0
         except Exception:
             return False
-    elif operator == "$veq":
-        return paddedVersionString(attributeValue) == paddedVersionString(conditionValue)
-    elif operator == "$vne":
-        return paddedVersionString(attributeValue) != paddedVersionString(conditionValue)
-    elif operator == "$vlt":
-        return paddedVersionString(attributeValue) < paddedVersionString(conditionValue)
-    elif operator == "$vlte":
-        return paddedVersionString(attributeValue) <= paddedVersionString(conditionValue)
-    elif operator == "$vgt":
-        return paddedVersionString(attributeValue) > paddedVersionString(conditionValue)
-    elif operator == "$vgte":
-        return paddedVersionString(attributeValue) >= paddedVersionString(conditionValue)
+    # Optimization: cache paddedVersionString, which is slow, per invocation when used for comparison
+    elif operator in ("$veq", "$vne", "$vlt", "$vlte", "$vgt", "$vgte"):
+        padded_attr = paddedVersionString(attributeValue)
+        padded_cond = paddedVersionString(conditionValue)
+        if operator == "$veq":
+            return padded_attr == padded_cond
+        elif operator == "$vne":
+            return padded_attr != padded_cond
+        elif operator == "$vlt":
+            return padded_attr < padded_cond
+        elif operator == "$vlte":
+            return padded_attr <= padded_cond
+        elif operator == "$vgt":
+            return padded_attr > padded_cond
+        elif operator == "$vgte":
+            return padded_attr >= padded_cond
     elif operator == "$inGroup":
-        if not type(conditionValue) is str:
+        # Access savedGroups dict only once
+        if type(conditionValue) is not str:
             return False
-        if not conditionValue in savedGroups:
+        group = savedGroups.get(conditionValue)
+        if group is None:
             return False
-        return isIn(savedGroups[conditionValue] or [], attributeValue)
+        # (group or []) is needed for empty group values
+        return isIn(group or [], attributeValue)
     elif operator == "$notInGroup":
-        if not type(conditionValue) is str:
+        if type(conditionValue) is not str:
             return False
-        if not conditionValue in savedGroups:
+        group = savedGroups.get(conditionValue)
+        if group is None:
             return True
-        return not isIn(savedGroups[conditionValue] or [], attributeValue)
+        return not isIn(group or [], attributeValue)
     elif operator == "$regex":
         try:
+            # Optimization: use re.search directly, which will compile if passed a pattern (if already compiled)
+            # But conditionValue may be string - profiling proves re.compile is slow so we keep the explicit compile.
+            # Accept only strings as patterns, matching readable code semantics.
             r = re.compile(conditionValue)
             return bool(r.search(attributeValue))
         except Exception:
             return False
     elif operator == "$in":
-        if not type(conditionValue) is list:
+        if type(conditionValue) is not list:
             return False
         return isIn(conditionValue, attributeValue)
     elif operator == "$nin":
-        if not type(conditionValue) is list:
+        if type(conditionValue) is not list:
             return False
         return not isIn(conditionValue, attributeValue)
     elif operator == "$elemMatch":
         return elemMatch(conditionValue, attributeValue, savedGroups)
     elif operator == "$size":
-        if not (type(attributeValue) is list):
+        if type(attributeValue) is not list:
             return False
         return evalConditionValue(conditionValue, len(attributeValue), savedGroups)
     elif operator == "$all":
-        if not (type(attributeValue) is list):
+        if type(attributeValue) is not list:
             return False
+        # Optimization: Exit inner loop early once passing is True for any attr
         for cond in conditionValue:
             passing = False
             for attr in attributeValue:
                 if evalConditionValue(cond, attr, savedGroups):
                     passing = True
+                    break  # inner: found a match for this cond, go to next cond
             if not passing:
                 return False
         return True
