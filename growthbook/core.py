@@ -1,6 +1,5 @@
 import logging
 import re
-import json
 
 from urllib.parse import urlparse, parse_qs
 from typing import Callable, Optional, Any, Set, Tuple, List, Dict
@@ -871,10 +870,8 @@ def _generate_sticky_bucket_assignment_doc(attribute_name: str, attribute_value:
 
     new_assignments = {**existing_assignments, **assignments}
 
-    # Compare JSON strings to see if they have changed
-    existing_json = json.dumps(existing_assignments, sort_keys=True)
-    new_json = json.dumps(new_assignments, sort_keys=True)
-    changed = existing_json != new_json
+    # Compare dicts directly instead of JSON strings for better performance
+    changed = existing_assignments != new_assignments
 
     return {
         'key': key,
@@ -885,7 +882,6 @@ def _generate_sticky_bucket_assignment_doc(attribute_name: str, attribute_value:
         },
         'changed': changed
     }
-    
 def _getExperimentResult(
     experiment: Experiment,
     evalContext: EvaluationContext,
