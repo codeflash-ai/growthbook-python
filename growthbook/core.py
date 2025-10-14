@@ -384,7 +384,8 @@ def _urlIsValid(url: Optional[str], pattern: str) -> bool:
 def getEqualWeights(numVariations: int) -> List[float]:
     if numVariations < 1:
         return []
-    return [1 / numVariations for _ in range(numVariations)]
+    w = 1.0 / numVariations
+    return [w] * numVariations
 
 
 def getBucketRanges(
