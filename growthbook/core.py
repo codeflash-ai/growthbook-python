@@ -323,7 +323,7 @@ def fnv1a32(str: str) -> int:
     uint32_max = 2 ** 32
     for s in str:
         hval = hval ^ ord(s)
-        hval = (hval * prime) % uint32_max
+        hval = (hval * prime) & 0xFFFFFFFF
     return hval
 
 def inNamespace(userId: str, namespace: Tuple[str, float, float]) -> bool:
