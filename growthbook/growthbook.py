@@ -11,7 +11,7 @@ import threading
 import logging
 
 from abc import ABC, abstractmethod
-from typing import Optional, Any, Set, Tuple, List, Dict, Callable
+from typing import Optional, Any, Set, List, Dict, Callable
 
 from .common_types import ( EvaluationContext, 
     Experiment, 
@@ -21,15 +21,15 @@ from .common_types import ( EvaluationContext,
     Options, 
     Result, StackContext, 
     UserContext, 
-    AbstractStickyBucketService,
-    FeatureRule
+    AbstractStickyBucketService
 )
+from growthbook.core import _getHashValue, eval_feature as core_eval_feature, run_experiment
 
 # Only require typing_extensions if using Python 3.7 or earlier
 if sys.version_info >= (3, 8):
-    from typing import TypedDict
+    pass
 else:
-    from typing_extensions import TypedDict
+    pass
 
 from base64 import b64decode
 from time import time
@@ -775,7 +775,27 @@ class GrowthBook(object):
 
     # @deprecated, use set_attributes
     def setAttributes(self, attributes: dict) -> None:
-        return self.set_attributes(attributes)
+        # Micro-optimization: Direct assignment and refresh, avoiding function indirection overhead.
+        self._attributes = attributes
+        # Inline the below inlining to slightly reduce call overhead.
+        sticky_bucket_service = self.sticky_bucket_service
+        if not sticky_bucket_service:
+            return
+
+        # Use local variables to minimize attribute lookup.
+        get_sticky_bucket_attributes = self._get_sticky_bucket_attributes
+        attributes_value = get_sticky_bucket_attributes()
+        if attributes_value == self._sticky_bucket_attributes:
+            # No changes, skip refresh
+            if hasattr(sticky_bucket_service, "logger"):
+                sticky_bucket_service.logger.debug("Skipping refresh of sticky bucket assignments, no changes")
+            return
+
+        self._sticky_bucket_attributes = attributes_value
+        # Only call `get_all_assignments` and update context if needed
+        sticky_bucket_assignment_docs = sticky_bucket_service.get_all_assignments(attributes_value)
+        self._sticky_bucket_assignment_docs = sticky_bucket_assignment_docs
+        self._user_ctx.sticky_bucket_assignment_docs = sticky_bucket_assignment_docs
 
     def set_attributes(self, attributes: dict) -> None:
         self._attributes = attributes
