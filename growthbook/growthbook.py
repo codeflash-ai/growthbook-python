@@ -11,7 +11,7 @@ import threading
 import logging
 
 from abc import ABC, abstractmethod
-from typing import Optional, Any, Set, Tuple, List, Dict, Callable
+from typing import Optional, Any, Set, List, Dict, Callable
 
 from .common_types import ( EvaluationContext, 
     Experiment, 
@@ -21,15 +21,15 @@ from .common_types import ( EvaluationContext,
     Options, 
     Result, StackContext, 
     UserContext, 
-    AbstractStickyBucketService,
-    FeatureRule
+    AbstractStickyBucketService
 )
+from growthbook.core import _getHashValue, eval_feature as core_eval_feature, run_experiment
 
 # Only require typing_extensions if using Python 3.7 or earlier
 if sys.version_info >= (3, 8):
-    from typing import TypedDict
+    pass
 else:
-    from typing_extensions import TypedDict
+    pass
 
 from base64 import b64decode
 from time import time
@@ -768,7 +768,7 @@ class GrowthBook(object):
 
     # @deprecated, use get_features
     def getFeatures(self) -> Dict[str, Feature]:
-        return self.get_features()
+        return self._features
 
     def get_features(self) -> Dict[str, Feature]:
         return self._features
