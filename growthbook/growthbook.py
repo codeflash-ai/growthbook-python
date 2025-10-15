@@ -622,16 +622,23 @@ class GrowthBook(object):
         self._subscriptions: Set[Any] = set()
 
         # support plugins
-        self._plugins: List = plugins or []
+        self._plugins: List = plugins if plugins is not None else []
         self._initialized_plugins: List = []
+
+        # Avoid repeating dictionary key lookups by reusing locals where possible
+        url_val = self._url
+        api_host_val = self._api_host
+        client_key_val = self._client_key
+        decryption_key_val = self._decryption_key
+        cache_ttl_val = self._cache_ttl
 
         self._global_ctx = GlobalContext(
             options=Options(
-                url=self._url,
-                api_host=self._api_host,
-                client_key=self._client_key,
-                decryption_key=self._decryption_key,
-                cache_ttl=self._cache_ttl,
+                url=url_val,
+                api_host=api_host_val,
+                client_key=client_key_val,
+                decryption_key=decryption_key_val,
+                cache_ttl=cache_ttl_val,
                 sticky_bucket_service=self.sticky_bucket_service,
                 sticky_bucket_identifier_attributes=self.sticky_bucket_identifier_attributes,
                 enabled=self._enabled,
@@ -639,10 +646,11 @@ class GrowthBook(object):
             ),
             features={},
             saved_groups=self._saved_groups
-        )       
+        )
+
         # Create a user context for the current user
         self._user_ctx: UserContext = UserContext(
-            url=self._url,
+            url=url_val,
             attributes=self._attributes,
             groups=self._groups,
             forced_variations=self._forcedVariations,
@@ -650,6 +658,7 @@ class GrowthBook(object):
             sticky_bucket_assignment_docs=self._sticky_bucket_assignment_docs
         )
 
+        # Set features only if input is not empty
         if features:
             self.setFeatures(features)
 
@@ -657,8 +666,10 @@ class GrowthBook(object):
         if self._client_key:
             feature_repo.add_feature_update_callback(self._on_feature_update)
 
+        # Plugin initialization
         self._initialize_plugins()
 
+        # Stream or initialize features and background refresh as needed
         if self._streaming:
             self.load_features()
             self.startAutoRefresh()
@@ -666,7 +677,7 @@ class GrowthBook(object):
             # Start background refresh task for stale-while-revalidate
             self.load_features()  # Initial load
             feature_repo.start_background_refresh(
-                self._api_host, self._client_key, self._decryption_key, 
+                self._api_host, self._client_key, self._decryption_key,
                 self._cache_ttl, self._stale_ttl
             )
 
